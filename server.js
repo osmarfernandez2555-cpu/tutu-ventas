@@ -214,4 +214,8 @@ app.delete('/api/leads', (req, res) => {
 
 app.get('/health', (_, res) => res.json({ status: 'ok', version: '1.0-venta' }));
 app.use(express.static(path.join(__dirname)));
-app.listen(PORT, () => console.log(`Tutu Venta Bot corriendo en :${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Tutu Venta Bot corriendo en :${PORT}`);
+  console.log('ANTHROPIC_API_KEY presente:', !!process.env.ANTHROPIC_API_KEY);
+  console.log('KEY inicio:', (process.env.ANTHROPIC_API_KEY || '').slice(0,10));
+});
