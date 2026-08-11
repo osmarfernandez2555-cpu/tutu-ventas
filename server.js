@@ -29,7 +29,8 @@ const LEADS_FILE = path.join(__dirname, 'leads_venta.json');
 app.use(cors({ origin: '*' }));
 app.use(express.json());
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+// anthropic se instancia al momento de usar para tomar la variable de entorno correctamente
+function getAnthropic() { return new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }); }
 
 // ── Leads ─────────────────────────────────────────────────────────────────────
 function readLeads() {
@@ -141,7 +142,7 @@ app.post('/webhook/evolution', async (req, res) => {
 
     const mensajesRecortados = conversaciones[tel].map(m => ({ role: m.role, content: m.content.slice(0,500) }));
     // Llamar directamente a Anthropic
-    const anthropicResp = await anthropic.messages.create({
+    const anthropicResp = await getAnthropic().messages.create({
       model: 'claude-sonnet-4-6',
       max_tokens: 500,
       system: SYSTEM_PROMPT,
@@ -166,7 +167,7 @@ app.post('/api/chat', async (req, res) => {
   if (!messages?.length) return res.status(400).json({ error: 'Faltan mensajes' });
 
   try {
-    const response = await anthropic.messages.create({
+    const response = await getAnthropic().messages.create({
       model: 'claude-sonnet-4-6',
       max_tokens: 500,
       system: SYSTEM_PROMPT,
