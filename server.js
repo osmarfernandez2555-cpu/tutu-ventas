@@ -83,9 +83,6 @@ PASO 4 — KILÓMETROS:
 PASO 5 — NOMBRE:
 "¿Me decís tu nombre completo?"
 
-PASO 6 — TELÉFONO:
-"¿Y tu número de teléfono o WhatsApp para contactarte?"
-
 PASO 7 — MONTO:
 "¿Cuánto esperás recibir por el auto?"
 
