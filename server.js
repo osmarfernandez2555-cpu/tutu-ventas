@@ -7,6 +7,21 @@ const Database = require('better-sqlite3');
 const Anthropic = require('@anthropic-ai/sdk');
 
 const app  = express();
+const EVO_URL      = process.env.EVO_URL      || 'https://evolution-api-production-8e853.up.railway.app';
+const EVO_APIKEY   = process.env.EVO_APIKEY   || '6f05426a2ab6e8508712211d4910251bde35070caa60cdce0e14a20157d460ce';
+const EVO_INSTANCE = process.env.EVO_INSTANCE || 'tutu-venta';
+const conversaciones = {};
+const cooldowns = {};
+const COOLDOWN_MS = 10000;
+
+const nodeFetch = require('node-fetch');
+async function evoSendText(telefono, texto) {
+  await nodeFetch(`${EVO_URL}/message/sendText/${EVO_INSTANCE}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'apikey': EVO_APIKEY },
+    body: JSON.stringify({ number: '54' + telefono, text: texto })
+  });
+}
 const PORT = process.env.PORT || 3001;
 const ADMIN_SECRET = process.env.ADMIN_SECRET || 'osmar1055';
 const LEADS_FILE = path.join(__dirname, 'leads_venta.json');
@@ -92,7 +107,57 @@ REGLAS:
 CLASIFICACIÓN (al final de CADA respuesta, invisible):
 <!--LEAD:{"nombre":"X","telefono":"X","vehiculo":"X","anio":"X","km":"X","monto":"X","score":"CALIENTE/TIBIO/FRIO"}-->`;
 
-// ── Endpoint chat ─────────────────────────────────────────────────────────────
+// ── Webhook Evolution API ────────────────────────────────────────────────────
+app.post('/webhook/evolution', async (req, res) => {
+  res.sendStatus(200);
+  try {
+    const body = req.body;
+    if (!body || body.event !== 'messages.upsert') return;
+    const msg = body.data;
+    if (!msg || msg.key?.fromMe) return;
+    if (msg.key?.remoteJid?.endsWith('@g.us')) return;
+
+    const esImagen = !!msg.message?.imageMessage;
+    const esAudio  = !!msg.message?.audioMessage;
+    const contenido = msg.message?.conversation || msg.message?.extendedTextMessage?.text || msg.message?.imageMessage?.caption || '';
+    if (!esImagen && (!contenido || contenido.length > 2000)) return;
+
+    const tel = msg.key.remoteJid.replace('@s.whatsapp.net','').replace('@c.us','').replace(/[^0-9]/g,'').replace(/^54/,'');
+    if (!tel || tel.length < 8) return;
+
+    // Cooldown solo para imagenes
+    const ahora = Date.now();
+    if (esImagen && cooldowns[tel] && ahora - cooldowns[tel] < COOLDOWN_MS) return;
+    if (esImagen) cooldowns[tel] = ahora;
+
+    const nombre = msg.pushName || tel;
+    const mensajeParaBot = esImagen ? '[El cliente envió una foto]' : contenido;
+
+    console.log(`[MSG] <- ${nombre} (${tel}): ${mensajeParaBot.slice(0,50)}`);
+
+    if (!conversaciones[tel]) conversaciones[tel] = [];
+    conversaciones[tel].push({ role: 'user', content: mensajeParaBot });
+    if (conversaciones[tel].length > 6) conversaciones[tel] = conversaciones[tel].slice(-6);
+
+    const mensajesRecortados = conversaciones[tel].map(m => ({ role: m.role, content: m.content.slice(0,500) }));
+    const resp = await nodeFetch(`http://localhost:${process.env.PORT || 3001}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: mensajesRecortados, sessionId: 'wa_' + tel })
+    });
+    const data = await resp.json();
+    if (data.error) throw new Error(data.error);
+    const respuesta = data.message;
+    if (!respuesta) return;
+
+    conversaciones[tel].push({ role: 'assistant', content: respuesta });
+    await evoSendText(tel, respuesta);
+    console.log(`[BOT] -> ${nombre}: ${respuesta.slice(0,60)}`);
+
+  } catch(e) { console.error('[WEBHOOK] Error:', e.message); }
+});
+
+// ── Endpoint chat ───────────────────────────────────────────────────────────────
 app.post('/api/chat', async (req, res) => {
   const { messages, sessionId } = req.body;
   if (!messages?.length) return res.status(400).json({ error: 'Faltan mensajes' });
