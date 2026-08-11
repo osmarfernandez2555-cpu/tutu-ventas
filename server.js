@@ -140,14 +140,17 @@ app.post('/webhook/evolution', async (req, res) => {
     if (conversaciones[tel].length > 6) conversaciones[tel] = conversaciones[tel].slice(-6);
 
     const mensajesRecortados = conversaciones[tel].map(m => ({ role: m.role, content: m.content.slice(0,500) }));
-    const resp = await nodeFetch(`http://localhost:${process.env.PORT || 3001}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: mensajesRecortados, sessionId: 'wa_' + tel })
+    // Llamar directamente a Anthropic
+    const anthropicResp = await anthropic.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 500,
+      system: SYSTEM_PROMPT,
+      messages: mensajesRecortados,
     });
-    const data = await resp.json();
-    if (data.error) throw new Error(data.error);
-    const respuesta = data.message;
+    const rawText = anthropicResp.content[0].text;
+    const respuesta = rawText.replace(/<!--LEAD:[\s\S]*?-->/, '').trim();
+    const leadMatch = rawText.match(/<!--LEAD:([\s\S]*?)-->/);
+    if (leadMatch) { try { const ld = JSON.parse(leadMatch[1]); if (ld && (ld.score === 'CALIENTE' || ld.score === 'TIBIO')) saveLead({...ld, sessionId: 'wa_'+tel, timestamp: new Date().toISOString()}); } catch(e) {} }
     if (!respuesta) return;
 
     conversaciones[tel].push({ role: 'assistant', content: respuesta });
