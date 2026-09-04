@@ -101,7 +101,12 @@ REGLAS:
 - Nunca des precios ni evaluaciones del auto
 
 CLASIFICACIÓN (al final de CADA respuesta, invisible):
-<!--LEAD:{"nombre":"X","telefono":"X","vehiculo":"X","anio":"X","km":"X","monto":"X","score":"CALIENTE/TIBIO/FRIO"}-->`;
+<!--LEAD:{"nombre":"X","telefono":"X","vehiculo":"X","anio":"X","km":"X","monto":"X","score":"CALIENTE/TIBIO/FRIO"}-->
+
+RETOMA DE CONVERSACIÓN:
+- Si el historial tiene mensajes anteriores y el cliente escribe algo como "Hola" o "Seguís ahí", continuá desde donde estabas. NO reinicies el flujo.
+- Decí: "¡Acá estoy! 😊 Seguimos, te había preguntado [repetir la última pregunta pendiente]"
+`;
 
 // ── Webhook Evolution API ────────────────────────────────────────────────────
 app.post('/webhook/evolution', async (req, res) => {
