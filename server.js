@@ -13,6 +13,8 @@ const EVO_INSTANCE = process.env.EVO_INSTANCE || 'tutu-venta';
 const conversaciones = {};
 const cooldowns = {};
 const COOLDOWN_MS = 10000;
+const convCerradas = {}; // tel -> timestamp cierre
+const CIERRE_TTL = 30 * 24 * 60 * 60 * 1000; // 30 dias
 
 const nodeFetch = require('node-fetch');
 async function evoSendText(telefono, texto) {
@@ -126,6 +128,12 @@ app.post('/webhook/evolution', async (req, res) => {
     const tel = msg.key.remoteJid.replace('@s.whatsapp.net','').replace('@c.us','').replace(/[^0-9]/g,'').replace(/^54/,'');
     if (!tel || tel.length < 8) return;
 
+    // Si la conversacion fue cerrada, ignorar
+    if (convCerradas[tel] && Date.now() - convCerradas[tel] < CIERRE_TTL) {
+      console.log(`[VENTA BOT] Ignorando mensaje de ${tel} - conversacion cerrada`);
+      return;
+    }
+
     // Cooldown solo para imagenes
     const ahora = Date.now();
     if (esImagen && cooldowns[tel] && ahora - cooldowns[tel] < COOLDOWN_MS) return;
@@ -157,6 +165,14 @@ app.post('/webhook/evolution', async (req, res) => {
     conversaciones[tel].push({ role: 'assistant', content: respuesta });
     await evoSendText(tel, respuesta);
     console.log(`[BOT] -> ${nombre}: ${respuesta.slice(0,60)}`);
+
+    // Detectar cierre para no volver a responder
+    const FRASES_CIERRE_V = ['si tenemos un comprador', 'te contactamos', 'muchas gracias por la info', 'gracias por la info', 'consignacion', 'consignación'];
+    const esCierre = FRASES_CIERRE_V.some(f => respuesta.toLowerCase().includes(f));
+    if (esCierre) {
+      convCerradas[tel] = Date.now();
+      console.log(`[VENTA BOT] Conversacion cerrada para ${tel}`);
+    }
 
   } catch(e) { console.error('[WEBHOOK] Error:', e.message); }
 });
