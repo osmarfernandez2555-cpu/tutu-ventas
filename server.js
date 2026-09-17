@@ -10,6 +10,47 @@ const app  = express();
 const EVO_URL      = process.env.EVO_URL      || 'https://evolution-api-production-8e853.up.railway.app';
 const EVO_APIKEY   = process.env.EVO_APIKEY   || '6f05426a2ab6e8508712211d4910251bde35070caa60cdce0e14a20157d460ce';
 const EVO_INSTANCE = process.env.EVO_INSTANCE || 'tutu-venta';
+
+// ── Persistencia en disco (antes vivía solo en memoria y se perdía en cada
+// reinicio de Railway, haciendo que el bot volviera a preguntar todo de nuevo
+// a clientes que ya habían terminado la charla) ──────────────────────────────
+const db = new Database(path.join(__dirname, 'venta_bot.db'));
+db.pragma('journal_mode = WAL');
+db.exec(`
+  CREATE TABLE IF NOT EXISTS conversaciones_estado (
+    telefono TEXT PRIMARY KEY,
+    historial TEXT NOT NULL DEFAULT '[]',
+    cerrada_at INTEGER,
+    updated_at INTEGER NOT NULL
+  );
+`);
+
+function cargarEstado(tel) {
+  const row = db.prepare('SELECT historial, cerrada_at FROM conversaciones_estado WHERE telefono = ?').get(tel);
+  if (!row) return { historial: [], cerradaAt: null };
+  let historial = [];
+  try { historial = JSON.parse(row.historial); } catch(e) {}
+  return { historial, cerradaAt: row.cerrada_at || null };
+}
+function guardarHistorial(tel, historial) {
+  db.prepare(`
+    INSERT INTO conversaciones_estado (telefono, historial, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(telefono) DO UPDATE SET historial = excluded.historial, updated_at = excluded.updated_at
+  `).run(tel, JSON.stringify(historial), Date.now());
+}
+function marcarCerrada(tel) {
+  db.prepare(`
+    INSERT INTO conversaciones_estado (telefono, historial, cerrada_at, updated_at)
+    VALUES (?, '[]', ?, ?)
+    ON CONFLICT(telefono) DO UPDATE SET cerrada_at = excluded.cerrada_at, updated_at = excluded.updated_at
+  `).run(tel, Date.now(), Date.now());
+}
+function estaCerrada(tel) {
+  const row = db.prepare('SELECT cerrada_at FROM conversaciones_estado WHERE telefono = ?').get(tel);
+  return row && row.cerrada_at && (Date.now() - row.cerrada_at < CIERRE_TTL);
+}
+
 const conversaciones = {};
 const cooldowns = {};
 const COOLDOWN_MS = 10000;
@@ -128,8 +169,8 @@ app.post('/webhook/evolution', async (req, res) => {
     const tel = msg.key.remoteJid.replace('@s.whatsapp.net','').replace('@c.us','').replace(/[^0-9]/g,'').replace(/^54/,'');
     if (!tel || tel.length < 8) return;
 
-    // Si la conversacion fue cerrada, ignorar
-    if (convCerradas[tel] && Date.now() - convCerradas[tel] < CIERRE_TTL) {
+    // Si la conversacion fue cerrada, ignorar (ahora se verifica en disco, no en memoria)
+    if (estaCerrada(tel)) {
       console.log(`[VENTA BOT] Ignorando mensaje de ${tel} - conversacion cerrada`);
       return;
     }
@@ -144,9 +185,14 @@ app.post('/webhook/evolution', async (req, res) => {
 
     console.log(`[MSG] <- ${nombre} (${tel}): ${mensajeParaBot.slice(0,50)}`);
 
-    if (!conversaciones[tel]) conversaciones[tel] = [];
+    // Recuperar historial: primero de memoria (rápido), si no está, de disco
+    // (cubre el caso de que el proceso se haya reiniciado)
+    if (!conversaciones[tel]) {
+      conversaciones[tel] = cargarEstado(tel).historial;
+    }
     conversaciones[tel].push({ role: 'user', content: mensajeParaBot });
     if (conversaciones[tel].length > 6) conversaciones[tel] = conversaciones[tel].slice(-6);
+    guardarHistorial(tel, conversaciones[tel]);
 
     const mensajesRecortados = conversaciones[tel].map(m => ({ role: m.role, content: m.content.slice(0,500) }));
     // Llamar directamente a Anthropic
@@ -163,14 +209,15 @@ app.post('/webhook/evolution', async (req, res) => {
     if (!respuesta) return;
 
     conversaciones[tel].push({ role: 'assistant', content: respuesta });
+    guardarHistorial(tel, conversaciones[tel]);
     await evoSendText(tel, respuesta);
     console.log(`[BOT] -> ${nombre}: ${respuesta.slice(0,60)}`);
 
-    // Detectar cierre para no volver a responder
+    // Detectar cierre para no volver a responder (se guarda en disco, sobrevive a reinicios)
     const FRASES_CIERRE_V = ['si tenemos un comprador', 'te contactamos', 'muchas gracias por la info', 'gracias por la info', 'consignacion', 'consignación'];
     const esCierre = FRASES_CIERRE_V.some(f => respuesta.toLowerCase().includes(f));
     if (esCierre) {
-      convCerradas[tel] = Date.now();
+      marcarCerrada(tel);
       console.log(`[VENTA BOT] Conversacion cerrada para ${tel}`);
     }
 
