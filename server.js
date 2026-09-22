@@ -65,6 +65,37 @@ async function evoSendText(telefono, texto) {
     body: JSON.stringify({ number: '54' + telefono, text: texto })
   });
 }
+
+// ── Envío automático al stock de Ruthina cuando termina el flujo de venta ────
+const RUTHINA_URL = process.env.RUTHINA_URL || 'https://compara-conejo-production.up.railway.app';
+async function enviarAStock(ld, tel, nombreWA) {
+  try {
+    const modelo = (ld.modelo || ld.vehiculo || '').trim();
+    if (!modelo) { console.log('[STOCK] No se envía: sin modelo/vehiculo identificado para', tel); return; }
+    const marca = (ld.marca || '').trim();
+    const body = {
+      marca: marca || 'Sin especificar',
+      modelo,
+      version: ld.version || '',
+      anio: ld.anio || '',
+      km: (ld.km || '').toString().replace(/\D/g, '') || 0,
+      precio: (ld.monto || '').toString().replace(/[^\d]/g, '') || '',
+      moneda: 'ARS',
+      estado: 'A revisar',
+      notas: `Cargado automático desde bot de venta WhatsApp. Precio pedido por el vendedor (${ld.nombre || nombreWA}), sujeto a tasación e inspección de Tutu.`,
+      ubicacion: 'Compra WhatsApp - A tasar',
+      telefono: tel
+    };
+    const r = await nodeFetch(`${RUTHINA_URL}/api/stock`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const data = await r.json();
+    if (data.ok) console.log(`[STOCK] Auto de ${tel} enviado a Ruthina (${data.accion}):`, marca, modelo);
+    else console.error('[STOCK] Error de Ruthina al guardar:', data.error);
+  } catch(e) { console.error('[STOCK] Error enviando a Ruthina:', e.message); }
+}
 const PORT = process.env.PORT || 3001;
 const ADMIN_SECRET = process.env.ADMIN_SECRET || 'osmar1055';
 const LEADS_FILE = path.join(__dirname, 'leads_venta.json');
@@ -144,7 +175,8 @@ REGLAS:
 - Nunca des precios ni evaluaciones del auto
 
 CLASIFICACIÓN (al final de CADA respuesta, invisible):
-<!--LEAD:{"nombre":"X","telefono":"X","vehiculo":"X","anio":"X","km":"X","monto":"X","score":"CALIENTE/TIBIO/FRIO"}-->
+<!--LEAD:{"nombre":"X","telefono":"X","marca":"X","modelo":"X","version":"X","vehiculo":"X","anio":"X","km":"X","monto":"X","score":"CALIENTE/TIBIO/FRIO"}-->
+En "marca" y "modelo" separá lo que el cliente dijo en el Paso 1 (ej: marca:"Volkswagen", modelo:"Gol Trend"). Si no podés distinguir cuál es la marca, dejala vacía y poné todo en "modelo". "vehiculo" es marca+modelo+versión juntos en un solo texto, para mostrar. "version" es lo del Paso 2 (equipamiento/motorización).
 
 RETOMA DE CONVERSACIÓN:
 - Si el historial tiene mensajes anteriores y el cliente escribe algo como "Hola" o "Seguís ahí", continuá desde donde estabas. NO reinicies el flujo.
@@ -205,7 +237,13 @@ app.post('/webhook/evolution', async (req, res) => {
     const rawText = anthropicResp.content[0].text;
     const respuesta = rawText.replace(/<!--LEAD:[\s\S]*?-->/, '').trim();
     const leadMatch = rawText.match(/<!--LEAD:([\s\S]*?)-->/);
-    if (leadMatch) { try { const ld = JSON.parse(leadMatch[1]); if (ld && (ld.score === 'CALIENTE' || ld.score === 'TIBIO')) saveLead({...ld, sessionId: 'wa_'+tel, timestamp: new Date().toISOString()}); } catch(e) {} }
+    let ld = null;
+    if (leadMatch) {
+      try {
+        ld = JSON.parse(leadMatch[1]);
+        if (ld && (ld.score === 'CALIENTE' || ld.score === 'TIBIO')) saveLead({...ld, sessionId: 'wa_'+tel, timestamp: new Date().toISOString()});
+      } catch(e) {}
+    }
     if (!respuesta) return;
 
     conversaciones[tel].push({ role: 'assistant', content: respuesta });
@@ -219,6 +257,7 @@ app.post('/webhook/evolution', async (req, res) => {
     if (esCierre) {
       marcarCerrada(tel);
       console.log(`[VENTA BOT] Conversacion cerrada para ${tel}`);
+      if (ld) await enviarAStock(ld, tel, nombre);
     }
 
   } catch(e) { console.error('[WEBHOOK] Error:', e.message); }
