@@ -227,13 +227,31 @@ app.post('/webhook/evolution', async (req, res) => {
     guardarHistorial(tel, conversaciones[tel]);
 
     const mensajesRecortados = conversaciones[tel].map(m => ({ role: m.role, content: m.content.slice(0,500) }));
-    // Llamar directamente a Anthropic
-    const anthropicResp = await getAnthropic().messages.create({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 500,
-      system: SYSTEM_PROMPT,
-      messages: mensajesRecortados,
-    });
+    // Llamar directamente a Anthropic, con 1 reintento si viene "overloaded" (picos pasajeros de la API)
+    async function llamarConReintento() {
+      try {
+        return await getAnthropic().messages.create({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 500,
+          system: SYSTEM_PROMPT,
+          messages: mensajesRecortados,
+        });
+      } catch(err) {
+        const esOverload = err?.status === 529 || err?.error?.error?.type === 'overloaded_error';
+        if (esOverload) {
+          console.log('[VENTA BOT] Anthropic saturado, reintentando en 2s...');
+          await new Promise(r => setTimeout(r, 2000));
+          return await getAnthropic().messages.create({
+            model: 'claude-sonnet-4-6',
+            max_tokens: 500,
+            system: SYSTEM_PROMPT,
+            messages: mensajesRecortados,
+          });
+        }
+        throw err;
+      }
+    }
+    const anthropicResp = await llamarConReintento();
     const rawText = anthropicResp.content[0].text;
     const respuesta = rawText.replace(/<!--LEAD:[\s\S]*?-->/, '').trim();
     const leadMatch = rawText.match(/<!--LEAD:([\s\S]*?)-->/);
