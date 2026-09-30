@@ -52,6 +52,7 @@ function estaCerrada(tel) {
 }
 
 const conversaciones = {};
+const mensajesProcesados = new Set(); // IDs de mensajes ya respondidos, para no duplicar
 const cooldowns = {};
 const COOLDOWN_MS = 10000;
 const convCerradas = {}; // tel -> timestamp cierre
@@ -175,8 +176,10 @@ REGLAS:
 - Nunca des precios ni evaluaciones del auto
 
 CLASIFICACIÓN (al final de CADA respuesta, invisible):
-<!--LEAD:{"nombre":"X","telefono":"X","marca":"X","modelo":"X","version":"X","vehiculo":"X","anio":"X","km":"X","monto":"X","score":"CALIENTE/TIBIO/FRIO"}-->
-En "marca" y "modelo" separá lo que el cliente dijo en el Paso 1 (ej: marca:"Volkswagen", modelo:"Gol Trend"). Si no podés distinguir cuál es la marca, dejala vacía y poné todo en "modelo". "vehiculo" es marca+modelo+versión juntos en un solo texto, para mostrar. "version" es lo del Paso 2 (equipamiento/motorización).
+Este bloque tiene que reflejar TODO lo que sabés del cliente hasta este punto de la charla, acumulado — no solo lo del último mensaje. Volvé a poner los datos que ya tenías aunque el cliente no los haya repetido ahora.
+Un dato que todavía no se preguntó o que el cliente no contestó va como "" (string vacío). NUNCA pongas "X" ni ningún otro texto de relleno — o mandás el dato real, o mandás "".
+<!--LEAD:{"nombre":"","telefono":"","marca":"","modelo":"","version":"","vehiculo":"","anio":"","km":"","monto":"","score":""}-->
+En "marca" y "modelo" separá lo que el cliente dijo en el Paso 1 (ej: marca:"Volkswagen", modelo:"Gol Trend"). Si no podés distinguir cuál es la marca, dejala vacía y poné todo en "modelo". "vehiculo" es marca+modelo+versión juntos en un solo texto, para mostrar. "version" es lo del Paso 2 (equipamiento/motorización). "score" va "CALIENTE", "TIBIO" o "FRIO" (nunca vacío).
 
 RETOMA DE CONVERSACIÓN:
 - Si el historial tiene mensajes anteriores y el cliente escribe algo como "Hola" o "Seguís ahí", continuá desde donde estabas. NO reinicies el flujo.
@@ -192,6 +195,21 @@ app.post('/webhook/evolution', async (req, res) => {
     const msg = body.data;
     if (!msg || msg.key?.fromMe) return;
     if (msg.key?.remoteJid?.endsWith('@g.us')) return;
+
+    // Evolution a veces manda el mismo mensaje más de una vez (al recibirlo y
+    // al actualizarlo). Ignoramos duplicados usando el ID único del mensaje.
+    const msgId = msg.key?.id;
+    if (msgId) {
+      if (mensajesProcesados.has(msgId)) {
+        console.log(`[VENTA BOT] Mensaje duplicado ignorado: ${msgId}`);
+        return;
+      }
+      mensajesProcesados.add(msgId);
+      if (mensajesProcesados.size > 500) {
+        const primero = mensajesProcesados.values().next().value;
+        mensajesProcesados.delete(primero);
+      }
+    }
 
     const esImagen = !!msg.message?.imageMessage;
     const esAudio  = !!msg.message?.audioMessage;
